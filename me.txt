@@ -1,0 +1,8 @@
+在命令行里执行：
+
+```
+cd C:\Users\X\maton-login-helper
+node server.js
+```
+
+就这么简单～ 🌸
