@@ -1,5 +1,6 @@
-import { getWait, delWait, getEarlyLink, delEarlyLink } from './lib.js';
-import { scanImapOnce } from './scan.js';
+import { randomAlias, normalizeAlias, requestMagicLink, extractMatonLink, extractMatonLinks, extractEmailFromMatonLink } from './lib.js';
+
+// 无状态版：不需要 Redis，每次请求直接查 IMAP
 
 export default async function handler(req, res) {
   const email = String(req.query.email || '').trim().toLowerCase();
@@ -7,42 +8,65 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: '缺少 email 参数' });
   }
 
-  const wait = await getWait(email);
-
-  // 没有 wait，检查 earlyLink
-  if (!wait) {
-    const cached = await getEarlyLink(email);
-    if (cached && Date.now() - cached.createdAt < 10 * 60 * 1000) {
-      await delEarlyLink(email);
-      return res.json({ email, link: cached.link, ready: true });
+  // 直接连 IMAP 查邮件
+  try {
+    const { IMAP_CONFIG, MAIL_MAILBOX, MAIL_LOOKBACK } = await import('./lib.js');
+    
+    if (!IMAP_CONFIG.host || !IMAP_CONFIG.auth.user) {
+      return res.status(500).json({ error: 'IMAP not configured' });
     }
-    return res.status(404).json({ error: '没有等待中的登录请求' });
-  }
 
-  // 超时检查
-  if (Date.now() - wait.createdAt > 10 * 60 * 1000) {
-    await delWait(email);
-    return res.status(410).json({ error: '等待已超时，请重新请求' });
-  }
+    const { ImapFlow } = await import('imapflow');
+    const { simpleParser } = await import('mailparser');
 
-  // 如果还没 link，触发一次 IMAP 扫描
-  if (!wait.link) {
+    const client = new ImapFlow({
+      host: IMAP_CONFIG.host,
+      port: IMAP_CONFIG.port,
+      secure: IMAP_CONFIG.secure,
+      auth: IMAP_CONFIG.auth,
+      logger: false,
+    });
+
+    await client.connect();
+
     try {
-      await scanImapOnce();
-    } catch (e) {
-      // IMAP 失败不影响流程，继续返回等待
+      const lock = await client.getMailboxLock(MAIL_MAILBOX);
+      try {
+        const total = client.mailbox.exists || 0;
+        if (total === 0) {
+          return res.json({ email, ready: false });
+        }
+
+        const start = Math.max(1, total - MAIL_LOOKBACK + 1);
+        for await (const message of client.fetch(`${start}:*`, { envelope: true, source: true }, { uid: true })) {
+          const subject = message.envelope?.subject || '';
+          if (!/maton|sign in/i.test(subject)) continue;
+
+          const parsed = await simpleParser(message.source);
+          const text = [parsed.subject, parsed.text, parsed.html].filter(Boolean).join('\n');
+          const links = extractMatonLinks(text);
+
+          for (const link of links) {
+            const linkEmail = extractEmailFromMatonLink(link);
+            if (linkEmail === email) {
+              // 匹配到了！删除邮件并返回链接
+              try {
+                await client.messageDelete(String(message.uid), { uid: true });
+              } catch (e) {}
+              return res.json({ email, link, ready: true });
+            }
+          }
+        }
+      } finally {
+        lock.release();
+      }
+    } finally {
+      await client.logout().catch(() => {});
     }
 
-    // 扫描后重新检查 earlyLink
-    const cached = await getEarlyLink(email);
-    if (cached && Date.now() - cached.createdAt < 10 * 60 * 1000) {
-      await delEarlyLink(email);
-      wait.link = cached.link;
-    }
+    // 没找到匹配的链接
+    res.json({ email, ready: false });
+  } catch (error) {
+    res.json({ email, ready: false, error: error.message });
   }
-
-  const ready = Boolean(wait.link);
-  if (ready) await delWait(email);
-
-  res.json({ email, link: wait.link, ready });
 }
