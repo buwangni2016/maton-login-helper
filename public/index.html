@@ -28,7 +28,7 @@
 <body>
   <main>
     <h1>Maton 登录助手</h1>
-    <p>输入域名邮箱或生成随机邮箱后，请求 Maton 发送登录邮件。后端会等待通知文本；通知到达并匹配到链接后，网页会自动跳转。手动粘贴仍保留作为备用。</p>
+    <p>输入域名邮箱或生成随机邮箱后，请求 Maton 发送登录邮件。后端每分钟自动扫描邮箱提取登录链接，匹配后网页自动跳转。手动粘贴仍保留作为备用。</p>
 
     <label for="email">邮箱 / 前缀</label>
     <input id="email" autocomplete="off" placeholder="留空自动生成，或输入 maton-test / xxx@iosos.cloudns.biz" />
@@ -37,23 +37,14 @@
       <button id="sendBtn">请求 Maton 发邮件</button>
     </div>
 
-    <label for="mailText">粘贴 Seek bot 发来的邮件内容</label>
-    <textarea id="mailText" placeholder="把 Telegram 里 Seek 邮箱 bot 发来的 Maton 登录邮件内容粘贴到这里，包含 https://maton.ai/api/auth/callback/... 链接即可"></textarea>
+    <label for="mailText">粘贴邮件内容（备用）</label>
+    <textarea id="mailText" placeholder="如果自动匹配失败，可把邮件内容粘贴到这里，包含 https://maton.ai/api/auth/callback/... 链接即可"></textarea>
     <div class="row">
       <button id="extractBtn">提取并登录 Maton</button>
       <a id="manualLink" class="button" style="display:none" target="_self" rel="noreferrer">打开登录链接</a>
     </div>
 
     <div id="status" class="status muted">准备就绪。建议先生成随机邮箱，再请求发信。</div>
-
-    <div id="telegramLogin" class="status muted" style="display:none; margin-top: 12px;">
-      <strong>Telegram 监听登录</strong>
-      <div id="telegramLoginText" style="margin-top:8px;">正在检查 Telegram 登录状态...</div>
-      <div class="row" id="telegramLoginForm" style="display:none;">
-        <input id="telegramLoginInput" autocomplete="off" placeholder="输入手机号、验证码或 2FA 密码" />
-        <button id="telegramLoginBtn">提交 Telegram 登录输入</button>
-      </div>
-    </div>
   </main>
   <script>
     const emailInput = document.querySelector('#email');
@@ -63,11 +54,9 @@
     const sendBtn = document.querySelector('#sendBtn');
     const extractBtn = document.querySelector('#extractBtn');
     const manualLink = document.querySelector('#manualLink');
-    const telegramLogin = document.querySelector('#telegramLogin');
-    const telegramLoginText = document.querySelector('#telegramLoginText');
-    const telegramLoginForm = document.querySelector('#telegramLoginForm');
-    const telegramLoginInput = document.querySelector('#telegramLoginInput');
-    const telegramLoginBtn = document.querySelector('#telegramLoginBtn');
+
+    const savedEmail = localStorage.getItem('maton_last_email');
+    if (savedEmail) emailInput.value = savedEmail;
 
     function setStatus(text, cls = 'muted') {
       statusBox.className = `status ${cls}`;
@@ -81,87 +70,24 @@
       setTimeout(() => { window.location.href = link; }, 500);
     }
 
-    function describeTelegramPrompt(prompt) {
-      if (prompt === 'phoneNumber') return '请输入 Telegram 手机号（带国家区号，例如 +86...）';
-      if (prompt === 'phoneCode') return '请输入 Telegram 发来的验证码';
-      if (prompt === 'password') return '请输入 Telegram 二步验证密码';
-      return '';
-    }
-
-    async function refreshTelegramLoginStatus() {
-      try {
-        const res = await fetch('/api/telegram-login/status');
-        const data = await res.json();
-        if (!data.enabled) {
-          telegramLogin.style.display = 'none';
-          return;
-        }
-        telegramLogin.style.display = 'block';
-        if (data.connected) {
-          telegramLogin.className = 'status ok';
-          telegramLoginText.textContent = 'Telegram 监听已连接，会自动读取 Seek bot 发来的 Maton 邮件通知。';
-          telegramLoginForm.style.display = 'none';
-          return;
-        }
-        if (data.prompt) {
-          telegramLogin.className = 'status ok';
-          telegramLoginText.textContent = describeTelegramPrompt(data.prompt);
-          telegramLoginInput.type = data.prompt === 'password' ? 'password' : 'text';
-          telegramLoginInput.placeholder = describeTelegramPrompt(data.prompt);
-          telegramLoginForm.style.display = 'flex';
-          return;
-        }
-        telegramLogin.className = data.error ? 'status err' : 'status muted';
-        telegramLoginText.textContent = data.error ? `Telegram 登录错误：${data.error}` : 'Telegram 监听正在连接...';
-        telegramLoginForm.style.display = 'none';
-      } catch (error) {
-        telegramLogin.style.display = 'block';
-        telegramLogin.className = 'status err';
-        telegramLoginText.textContent = `Telegram 状态检查失败：${error.message}`;
-      }
-    }
-
-    setInterval(refreshTelegramLoginStatus, 2000);
-    refreshTelegramLoginStatus();
-
-    telegramLoginBtn.addEventListener('click', async () => {
-      telegramLoginBtn.disabled = true;
-      try {
-        const res = await fetch('/api/telegram-login/input', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ value: telegramLoginInput.value }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-        telegramLoginInput.value = '';
-        telegramLoginText.textContent = '已提交，等待 Telegram 下一步...';
-        telegramLoginForm.style.display = 'none';
-      } catch (error) {
-        telegramLoginText.textContent = `提交失败：${error.message}`;
-      } finally {
-        telegramLoginBtn.disabled = false;
-      }
-    });
-
     async function waitForLink(email) {
       const startedAt = Date.now();
       while (Date.now() - startedAt < 10 * 60 * 1000) {
-        const res = await fetch(`/api/wait-link?email=${encodeURIComponent(email)}`);
-        const data = await res.json();
-        if (res.ok && data.ready && data.link) {
-          openLink(data.link);
-          return;
+        try {
+          const res = await fetch(`/api/wait-link?email=${encodeURIComponent(email)}`);
+          const data = await res.json();
+          if (res.ok && data.ready && data.link) {
+            openLink(data.link);
+            return;
+          }
+        } catch (e) {
+          // 网络错误继续重试
         }
-        if (!res.ok && res.status !== 404) throw new Error(data.error || `HTTP ${res.status}`);
         const seconds = Math.floor((Date.now() - startedAt) / 1000);
-        const fallbackText = data.fallbackReady
-          ? '\n已收到 Telegram/域名通知，但还在等待邮箱正文里的真实 callback 链接...'
-          : '';
-        setStatus(`已请求发送登录邮件：${email}${fallbackText}\n正在等待邮箱正文链接... ${seconds}s\n如果通知已经发到 Telegram，但页面没跳转，请把消息粘贴到下面手动提取。`, 'ok');
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        setStatus(`已请求发送登录邮件：${email}\n正在等待邮箱链接... ${seconds}s`, 'ok');
+        await new Promise(resolve => setTimeout(resolve, 3000));
       }
-      throw new Error('等待通知超时，请重新请求登录邮件或手动粘贴邮件内容');
+      setStatus('等待超时，请重新请求或手动粘贴邮件内容', 'err');
     }
 
     randomBtn.addEventListener('click', async () => {
@@ -170,6 +96,7 @@
         const res = await fetch('/api/random-alias');
         const data = await res.json();
         emailInput.value = data.email;
+        localStorage.setItem('maton_last_email', data.email);
         setStatus(`已生成：${data.email}`);
       } catch (error) {
         setStatus(`生成失败：${error.message}`, 'err');
@@ -191,6 +118,7 @@
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
         emailInput.value = data.email;
+        localStorage.setItem('maton_last_email', data.email);
         await waitForLink(data.email);
       } catch (error) {
         setStatus(`请求失败：${error.message}`, 'err');
