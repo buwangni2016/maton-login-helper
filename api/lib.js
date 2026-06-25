@@ -1,12 +1,4 @@
-import { Redis } from '@upstash/redis';
-
-// Upstash Redis 从环境变量自动读取 UPSTASH_REDIS_REST_URL 和 UPSTASH_REDIS_REST_TOKEN
-export function getRedis() {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return new Redis({ url, token });
-}
+// 无状态版 lib.js — 不依赖 Redis
 
 export const DEFAULT_DOMAIN = process.env.DEFAULT_DOMAIN || 'iosos.cloudns.biz';
 export const MATON_BASE_URL = process.env.MATON_BASE_URL || 'https://www.maton.ai';
@@ -79,75 +71,6 @@ export function extractEmailFromMatonLink(link) {
     const match = String(link || '').match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
     return match ? decodeURIComponent(match[0]).toLowerCase() : null;
   }
-}
-
-// Redis 操作封装
-const WAIT_KEY = 'maton:waits';
-const EARLY_KEY = 'maton:early';
-const WAIT_TTL = 600; // 10 分钟
-
-export async function setWait(email, link = null) {
-  const redis = getRedis();
-  if (!redis) return;
-  await redis.hset(WAIT_KEY, { [email]: JSON.stringify({ link, createdAt: Date.now() }) });
-  await redis.expire(WAIT_KEY, WAIT_TTL);
-}
-
-export async function getWait(email) {
-  const redis = getRedis();
-  if (!redis) return null;
-  const data = await redis.hget(WAIT_KEY, email);
-  return data ? JSON.parse(data) : null;
-}
-
-export async function delWait(email) {
-  const redis = getRedis();
-  if (!redis) return;
-  await redis.hdel(WAIT_KEY, email);
-}
-
-export async function getAllWaits() {
-  const redis = getRedis();
-  if (!redis) return {};
-  const data = await redis.hgetall(WAIT_KEY);
-  if (!data) return {};
-  const result = {};
-  for (const [k, v] of Object.entries(data)) {
-    result[k] = typeof v === 'string' ? JSON.parse(v) : v;
-  }
-  return result;
-}
-
-export async function setEarlyLink(email, link) {
-  const redis = getRedis();
-  if (!redis) return;
-  await redis.hset(EARLY_KEY, { [email]: JSON.stringify({ link, createdAt: Date.now() }) });
-  await redis.expire(EARLY_KEY, WAIT_TTL);
-}
-
-export async function getEarlyLink(email) {
-  const redis = getRedis();
-  if (!redis) return null;
-  const data = await redis.hget(EARLY_KEY, email);
-  return data ? JSON.parse(data) : null;
-}
-
-export async function delEarlyLink(email) {
-  const redis = getRedis();
-  if (!redis) return;
-  await redis.hdel(EARLY_KEY, email);
-}
-
-export async function getAllEarlyLinks() {
-  const redis = getRedis();
-  if (!redis) return {};
-  const data = await redis.hgetall(EARLY_KEY);
-  if (!data) return {};
-  const result = {};
-  for (const [k, v] of Object.entries(data)) {
-    result[k] = typeof v === 'string' ? JSON.parse(v) : v;
-  }
-  return result;
 }
 
 // 请求 Maton 发送登录邮件

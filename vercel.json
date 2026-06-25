@@ -1,7 +1,19 @@
 {
   "functions": {
-    "api/*.js": {
-      "maxDuration": 30
+    "api/send-login-email.js": {
+      "maxDuration": 15
+    },
+    "api/wait-link.js": {
+      "maxDuration": 20
+    },
+    "api/extract-link.js": {
+      "maxDuration": 10
+    },
+    "api/random-alias.js": {
+      "maxDuration": 5
+    },
+    "api/debug.js": {
+      "maxDuration": 5
     }
   }
 }
